@@ -1,0 +1,52 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+env/
+venv/
+ENV/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# --- Reinforcement Learning & Training Artifacts ---
+# Exclude trained model weights (keep code, not large binary weights)
+heavy_models/
+checkpoints/
+
+# PyTorch / SB3 weights or saved states
+*.pt
+# *.pth  # Note: .pth is intentionally not ignored so lightweight 
+# model checkpoints can be versioned; use heavy_models/ or checkpoints/ for large files
+*.ckpt
+*.zip
+
+# --- Logging & Monitoring ---
+# TensorBoard runs and event logs
+runs/
+tensorboard_logs/
+*.tfevents.*
+
+# --- Agent Recordings & Evaluation Outputs ---
+# Captured gameplay videos, GIFs, and evaluation logs
+videos/
+recordings/
+eval_results/
+*.mp4
+*.avi
+*.gif
+*.csv
