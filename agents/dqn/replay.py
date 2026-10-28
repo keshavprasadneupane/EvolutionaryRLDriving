@@ -1,4 +1,4 @@
-from typing import NamedTuple,Any
+from typing import NamedTuple, Any
 import numpy as np
 import torch
 
@@ -15,6 +15,10 @@ class Transitions(NamedTuple):
 class ReplayBuffer:
 	"""
 	Fixed-size ring buffer of transitions stored in preallocated NumPy arrays.
+
+	State arrays are allocated with the dtype of the first state added, so
+	image observations stored as uint8 take 4x less memory than float32.
+	All states added afterwards must use the same shape and dtype.
 
 	Compared with a deque of tuples, sampling is O(batch_size) instead of
 	O(buffer_size) (a deque is slow to index in the middle), memory is
@@ -42,11 +46,9 @@ class ReplayBuffer:
 	def __len__(self) -> int:
 		return self._size
 
-	def _allocate(self, state_shape: tuple[int, ...]) -> None:
-		self._states = np.zeros((self.capacity, *state_shape), dtype=np.float32)
-		self._next_states = np.zeros(
-			(self.capacity, *state_shape), dtype=np.float32
-		)
+	def _allocate(self, state_shape: tuple[int, ...], dtype: np.dtype) -> None:
+		self._states = np.zeros((self.capacity, *state_shape), dtype=dtype)
+		self._next_states = np.zeros((self.capacity, *state_shape), dtype=dtype)
 
 	def add(
 		self,
@@ -57,19 +59,25 @@ class ReplayBuffer:
 		done: bool,
 	) -> None:
 		"""Adds one transition, overwriting the oldest when full."""
-		state = np.asarray(state, dtype=np.float32)
-		next_state = np.asarray(next_state, dtype=np.float32)
+		state = np.asarray(state)
+		next_state = np.asarray(next_state)
 
 		if self._states is None:
-			self._allocate(state.shape)
+			self._allocate(state.shape, state.dtype)
 		assert self._states is not None and self._next_states is not None
 
-		if state.shape != self._states.shape[1:] or (
-			next_state.shape != self._states.shape[1:]
+		# The dtype check matters: assigning a float array into a uint8
+		# buffer would silently truncate it.
+		if (
+			state.shape != self._states.shape[1:]
+			or next_state.shape != self._states.shape[1:]
+			or state.dtype != self._states.dtype
+			or next_state.dtype != self._states.dtype
 		):
 			raise ValueError(
-				f"Expected state shape {self._states.shape[1:]}, got "
-				f"{state.shape} and {next_state.shape}."
+				f"Expected state {self._states.shape[1:]} {self._states.dtype}, "
+				f"got {state.shape} {state.dtype} and "
+				f"{next_state.shape} {next_state.dtype}."
 			)
 
 		i = self._pos
@@ -139,7 +147,7 @@ class ReplayBuffer:
 		recent = slice(n - keep, n)
 
 		states = ReplayBuffer._to_numpy(state["states"])
-		self._allocate(states.shape[1:])
+		self._allocate(states.shape[1:], states.dtype)
 		assert self._states is not None and self._next_states is not None
 
 		self._states[:keep] = states[recent]

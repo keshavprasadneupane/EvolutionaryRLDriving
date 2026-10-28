@@ -12,6 +12,9 @@ env/
 venv/
 ENV/
 
+# Secrets
+.env
+
 # IDEs and Editors
 .vscode/
 .idea/
@@ -23,15 +26,22 @@ ENV/
 Thumbs.db
 ehthumbs.db
 
+# Tool caches and logs
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+*.log
+
 # --- Reinforcement Learning & Training Artifacts ---
-# Exclude trained model weights (keep code, not large binary weights)
+# Exclude trained model weights and training state (keep code, not binaries).
+# A DQN checkpoint is ~15 MB, and far larger if the replay buffer was saved.
 heavy_models/
+models/
 checkpoints/
 
 # PyTorch / SB3 weights or saved states
 *.pt
-# *.pth  # Note: .pth is intentionally not ignored so lightweight 
-# model checkpoints can be versioned; use heavy_models/ or checkpoints/ for large files
+*.pth
 *.ckpt
 *.zip
 

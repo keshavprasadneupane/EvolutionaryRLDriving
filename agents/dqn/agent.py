@@ -53,8 +53,14 @@ class DQNetworkAgent:
 		self.device = network.device
 
 	def get_action(self, state: np.ndarray) -> tuple[int, float]:
-		"""Selects the greedy action and returns its estimated Q-value."""
-		q_values = self.network.predict(state)
+		"""
+		Selects the greedy action and returns its estimated Q-value.
+
+		`state` is a single, unbatched observation (e.g. (C, H, W)). A batch
+		dimension is added here because layers like nn.Flatten assume dim 0
+		is the batch.
+		"""
+		q_values = self.network.predict(state[np.newaxis, ...])[0]
 		action = int(np.argmax(q_values))
 		return action, float(q_values[action])
 
@@ -164,8 +170,8 @@ class DQNetworkTrainAgent(DQNetworkAgent):
 		)
 
 	def _predict_target(self, state: np.ndarray) -> np.ndarray:
-		"""Computes Q-values using the target network."""
-		return self.target_network.predict(state)
+		"""Computes Q-values for a single, unbatched state using the target network."""
+		return self.target_network.predict(state[np.newaxis, ...])[0]
 
 	@torch.no_grad()
 	def _next_state_value(self, next_states: torch.Tensor) -> torch.Tensor:
@@ -213,12 +219,13 @@ class DQNetworkTrainAgent(DQNetworkAgent):
 
 			batch = self.replay_buffer.sample(self.batch_size)
 		else:
-			# Online learning: use only the current transition.
+			# Online learning: use only the current transition. States keep
+			# their original dtype (e.g. uint8); _optimize converts to float32.
 			batch = Transitions(
-				states=np.asarray(state, dtype=np.float32)[None],
+				states=np.asarray(state)[None],
 				actions=np.asarray([action], dtype=np.int64),
 				rewards=np.asarray([reward], dtype=np.float32),
-				next_states=np.asarray(next_state, dtype=np.float32)[None],
+				next_states=np.asarray(next_state)[None],
 				dones=np.asarray([float(done)], dtype=np.float32),
 			)
 
@@ -226,6 +233,7 @@ class DQNetworkTrainAgent(DQNetworkAgent):
 
 	def _optimize(self, batch: Transitions, discount_factor: float) -> float:
 		"""Runs one gradient step on a batch and returns the loss."""
+		# States may arrive as uint8 (0-255); the network scales them itself.
 		states = torch.as_tensor(
 			batch.states, dtype=torch.float32, device=self.device
 		)

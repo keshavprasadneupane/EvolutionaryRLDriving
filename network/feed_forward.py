@@ -64,11 +64,7 @@ class FeedForward(NNewtork):
 		sequential_nn = nn.Sequential(*layers)
 
 		super().__init__(
-			custom_nn=sequential_nn,
+			model=sequential_nn,
 			loss_function=loss_function,
 			device=device,
 		)
-
-	def deep_copy(self) -> "FeedForward":
-		"""Returns a deep copy of the entire FeedForward instance."""
-		return self._deep_copy(self)

@@ -1,7 +1,11 @@
 from dataclasses import asdict, dataclass
 from typing import Any, ClassVar, Self
 import warnings
+from enum import Enum
 
+class MergeStrategy(str,Enum):
+	OVERWRITE = "overwrite"
+	UNION = "union"
 
 @dataclass
 class ConfigBase:
@@ -105,3 +109,41 @@ class ConfigBase:
 		}
 
 		return type(self)(**merged)
+
+	def print_config(self):
+		print("Current Configuration:")
+		for field_name, field_value in self.to_dict().items():
+			print(f"{field_name}: {field_value}")
+
+
+	def to_dict(self) -> dict[str, Any]:
+		"""Convert the configuration to a dictionary, optionally ignoring specified fields.
+
+		Note:
+			Subclasses can override `to_dict` to customize the output format. 
+			Leave `_to_dict` intact to inherit proper handling of `ignore_fields` 
+			and `overwrite_option`.
+		"""
+		return self._to_dict()
+
+	def _to_dict(
+		self, 
+		ignore_fields: set[str] | None = None, 
+		overwrite_option: MergeStrategy = MergeStrategy.UNION
+	) -> dict[str, Any]:
+		"""Internal helper for dictionary conversion with filtering strategy support."""
+		super_ignore_field = {"CRITICAL_FIELDS", "OVERWRITABLE_FIELDS", "BOUNDS"}
+
+		if ignore_fields is None:
+			ignore_fields = super_ignore_field
+		elif overwrite_option == MergeStrategy.OVERWRITE:
+			# ignore_fields completely replaces the default super_ignore_field
+			pass
+		else:  # MergeStrategy.UNION
+			ignore_fields = ignore_fields.union(super_ignore_field)
+
+		return {
+			field: getattr(self, field)
+			for field in self.__dataclass_fields__
+			if field not in ignore_fields
+		}

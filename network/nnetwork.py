@@ -2,13 +2,12 @@ import copy
 import numpy as np
 import torch
 from torch import nn
-from abc import ABC, abstractmethod
-from typing import TypeVar
+from typing import Self, TypeVar
 
 
 M = TypeVar("M", bound="NNewtork")
 
-class NNewtork(nn.Module, ABC):
+class NNewtork(nn.Module):
 	"""
 	A base neural network wrapper module.
 	Manages a custom neural network module, loss function criterion, 
@@ -16,7 +15,7 @@ class NNewtork(nn.Module, ABC):
 	"""
 	def __init__(
 		self,
-		custom_nn: nn.Module,
+		model: nn.Module,
 		loss_function: nn.Module | None = None,
 		device: str = "cpu",
 	) -> None:
@@ -30,7 +29,7 @@ class NNewtork(nn.Module, ABC):
 		super().__init__()
 
 		self.device = NNewtork._validate_device(device)
-		self.nn = custom_nn.to(self.device)
+		self.nn = model.to(self.device)
 
 		self.loss_function = (
 			loss_function if loss_function is not None 
@@ -62,16 +61,10 @@ class NNewtork(nn.Module, ABC):
 
 		return q_values.cpu().numpy()
 
-	@abstractmethod
-	def deep_copy(self) -> "NNewtork":
-		"""Returns a deep, independent copy of the network instance."""
-		return self._deep_copy(self)
 
-
-	@staticmethod
-	def _deep_copy(newtork:M) -> M:
-		"""Static method to create a deep copy of a given network."""
-		return copy.deepcopy(newtork)
+	def deep_copy(self) -> "Self":
+		"""Creates a deep copy of the current network instance."""
+		return copy.deepcopy(self)
 
 	@staticmethod
 	def _validate_device(value: str) -> str:

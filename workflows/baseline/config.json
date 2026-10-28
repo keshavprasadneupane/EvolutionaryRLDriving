@@ -1,0 +1,18 @@
+{
+	"epochs": 50000,
+	"target_update_freq": 500,
+	"hidden_dim": 256,
+	"learning_rate": 0.0001,
+	"discount_factor": 0.99,
+	"tau": 0.6,
+	"initial_epsilon": 1.0,
+	"min_epsilon": 0.05,
+	"epsilon_decay": 0.9995,
+	"replay_capacity": 10000,
+	"replay_batch_size": 32,
+	"replay_warmup": 1000,
+	"log_interval": 10,
+	"save_interval": 50,
+	"device": "cpu",
+	"save_model_path": "models"
+}
