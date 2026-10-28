@@ -110,21 +110,3 @@ def save_the_model(
 	Save the model and metadata to a checkpoint file, converting NumPy values to safe primitive values.
 	"""
 	tch.save(_to_safe_checkpoint_value(save_data), save_path)
-
-
-
-# Replace the existing preprocess_observation in utility/basic.py with this.
-# (Make sure `import numpy as np` is already at the top of that file.)
-
-def preprocess_observation(observation: np.ndarray) -> np.ndarray:
-	"""
-	Crops CarRacing-v3 to 84x84 and transposes to (C, H, W).
-
-	Returns uint8 in [0, 255]. Scaling to [0.0, 1.0] is done inside the network
-	(ConvNet.forward), so replay buffers can store frames at 1 byte per pixel.
-	"""
-	# 1. Crop bottom text and edges -> (84, 84, 3) uint8
-	cropped = observation[:-12, 6:-6]
-
-	# 2. Transpose to (3, 84, 84); contiguous copy so it is safe to store
-	return np.ascontiguousarray(np.transpose(cropped, (2, 0, 1)))
