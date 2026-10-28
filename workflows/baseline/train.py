@@ -20,7 +20,7 @@ from training.run_logger import RunLogger
 from agents.dqn.agent import DQNetworkTrainAgent
 from network.convnet import ConvNet
 from .config import Config
-from env.car_race import CarRacing
+from environments.car_race import CarRacing
 
 CURRENT_DIR = Path(__file__).parent
 DEFAULT_CONFIG_PATH = "config.json"
@@ -29,8 +29,8 @@ POINTER_NAME = "current_checkpoint.txt"
 EXP_NAME = "dqn_carracing_baseline"
 SEED = 42
 SAVE_REPLAY = False
-TRAIN_EVERY = 4  # env steps between gradient updates
-NUM_ENVS = 4     # Number of parallel CPU environments for AsyncVectorEnv
+TRAIN_EVERY = 3  # train every N environment steps (not episodes). This is a hyperparameter that can be tuned for performance.
+NUM_ENVS = 10    # Number of parallel CPU environments for AsyncVectorEnv
 
 torch.manual_seed(SEED)
 random.seed(SEED)
@@ -173,7 +173,6 @@ def train(config: Config, fresh: bool = False) -> None:
 		print("\n\n-> Effective configuration after merging with checkpoint:")
 		config.print_config()
 
-	# Create vectorized environments
 	env = gym.vector.AsyncVectorEnv([
 		make_env(config, i) for i in range(NUM_ENVS)
 	])
@@ -222,11 +221,15 @@ def train(config: Config, fresh: bool = False) -> None:
 		resume_from_episode=start_epi,
 		resume_env_steps=total_steps,
 	) as run:
-		pbar = None
+		pbar: Any = None
 		try:
 			states, _ = env.reset(seed=[SEED + i + start_epi * NUM_ENVS for i in range(NUM_ENVS)])
 			env_rewards = np.zeros(NUM_ENVS, dtype=np.float32)
 			env_lengths = np.zeros(NUM_ENVS, dtype=np.int32)
+			
+			# Track loss per environment independently
+			env_running_loss = np.zeros(NUM_ENVS, dtype=np.float32)
+			env_loss_steps = np.zeros(NUM_ENVS, dtype=np.int32)
 
 			pbar = tqdm(
 				initial=completed_episodes,
@@ -236,6 +239,7 @@ def train(config: Config, fresh: bool = False) -> None:
 			)
 
 			while completed_episodes < config.epochs:
+				# Select actions for all parallel environments
 				actions = np.empty(NUM_ENVS, dtype=np.int64)
 				for i in range(NUM_ENVS):
 					if random.random() < current_epsilon:
@@ -245,9 +249,6 @@ def train(config: Config, fresh: bool = False) -> None:
 						actions[i] = int(act)
 
 				next_states, rewards, terminations, truncations, infos = env.step(actions)
-
-				running_loss = 0.0
-				loss_steps = 0
 
 				for i in range(NUM_ENVS):
 					done = terminations[i] or truncations[i]
@@ -274,13 +275,14 @@ def train(config: Config, fresh: bool = False) -> None:
 					)
 
 					if loss > 0.0:
-						running_loss += loss
-						loss_steps += 1
+						env_running_loss[i] += loss
+						env_loss_steps[i] += 1
 
 					if done:
 						completed_episodes += 1
 						current_epsilon = max(config.min_epsilon, current_epsilon * config.epsilon_decay)
-						mean_loss = (running_loss / loss_steps) if loss_steps > 0 else None
+						
+						mean_loss = (env_running_loss[i] / env_loss_steps[i]) if env_loss_steps[i] > 0 else None
 
 						run.log_episode(
 							episode=completed_episodes - 1,
@@ -291,8 +293,12 @@ def train(config: Config, fresh: bool = False) -> None:
 							loss=mean_loss,
 						)
 
+						# Reset trackers for this specific environment slot
 						env_rewards[i] = 0.0
 						env_lengths[i] = 0
+						env_running_loss[i] = 0.0
+						env_loss_steps[i] = 0
+
 						pbar.update(1)
 
 						if completed_episodes % config.save_interval == 0:
