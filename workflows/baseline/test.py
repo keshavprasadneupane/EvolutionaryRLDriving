@@ -8,8 +8,10 @@ import sys
 import threading
 from collections import Counter
 from collections.abc import Callable
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
@@ -18,11 +20,11 @@ import torch
 from agents.dqn.agent import DQNetworkTestAgent
 from environments.car_race import CarRacing
 from network.convnet import ConvNet
+from training.run_logger import RunLogger
 from utility.basic import load_checkpoint, load_config
 from .config import Config
 from .train import (
 	CURRENT_DIR,
-	DEFAULT_EXP_NAME,
 	get_checkpoint_dir,
 	get_final_model_dir,
 )
@@ -33,28 +35,27 @@ DEFAULT_CONFIG_PATH = "config.json"
 # Checkpoints written before the per-experiment layout lived in  checkpoints/
 LEGACY_CHECKPOINT_DIR = CURRENT_DIR / "checkpoints"
 
-EVAL_FIELDS = ("episode", "env_steps", "eval_seed", "reward", "length")
-
 # CarRacing-v3 with continuous=False: 0 noop, 1 steer left, 2 steer right, 3 gas, 4 brake
 ACTION_NAMES = {0: "noop", 1: "left", 2: "right", 3: "gas", 4: "brake"}
 
 EPISODE_PATTERN = re.compile(r"epi(\d+)")
+SEED_PATTERN = re.compile(r"_seed(\d+)")
 
 
 def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
 		description=(
 			"Evaluate a trained CarRacing DQN model (final model or a checkpoint). "
-			"Results are appended to the training run's eval.csv unless --no-record "
-			"is given."
+			"Results are appended to the eval.csv of the training run the model came "
+			"from (found the same way train.py finds it when resuming) unless "
+			"--no-record is given."
 		)
 	)
 
 	parser.add_argument(
-		"--exp-name",
+		"exp_name",
 		type=str,
-		default=DEFAULT_EXP_NAME,
-		help="Experiment name. Models are looked up under checkpoint/<exp-name>/ and models/<exp-name>/.",
+		help="Experiment name (required). Models are looked up under checkpoint/<exp_name>/ and models/<exp_name>/.",
 	)
 	parser.add_argument(
 		"--model-type",
@@ -102,21 +103,11 @@ def parse_args() -> argparse.Namespace:
 		help="Explicit path to a model file. Overrides --model-type/--checkpoint-name/--model-name.",
 	)
 	parser.add_argument(
-		"--run-dir",
-		type=Path,
-		default=None,
-		help=(
-			"Existing training run directory containing metrics.csv and eval.csv. "
-			"Evaluation results are appended to its eval.csv. Required unless "
-			"--no-record or --render-mode human is used."
-		),
-	)
-	parser.add_argument(
 		"--no-record",
 		action="store_true",
 		help=(
-			"Do not write anything to eval.csv (or the sweep/ file with --sweep). Results are "
-			"only printed. --run-dir is not needed in this mode."
+			"Do not write anything to eval.csv (or the sweep/ file with --sweep). "
+			"Results are only printed."
 		),
 	)
 	parser.add_argument(
@@ -126,22 +117,19 @@ def parse_args() -> argparse.Namespace:
 		help="Path to the configuration JSON. Defaults to this workflow's config.json.",
 	)
 	parser.add_argument(
-		"--episodes",
-		type=int,
-		default=1,
-		help="Number of evaluation episodes per evaluation seed.",
-	)
-	parser.add_argument(
-		"--seed-count",
-		type=int,
-		default=5,
-		help="Number of distinct evaluation seeds to run.",
-	)
-	parser.add_argument(
-		"--seed-start",
+		"--seed-min",
 		type=int,
 		default=10_000,
-		help="First evaluation seed. Subsequent seeds are consecutive.",
+		help="First evaluation seed (inclusive). Each seed is one evaluation episode.",
+	)
+	parser.add_argument(
+		"--seed-max",
+		type=int,
+		default=10_004,
+		help=(
+			"Last evaluation seed (inclusive). Ignored with --render-mode human, "
+			"which loops forever starting at --seed-min."
+		),
 	)
 	parser.add_argument(
 		"--render-mode",
@@ -149,8 +137,8 @@ def parse_args() -> argparse.Namespace:
 		default="state_pixels",
 		help=(
 			"Use human for interactive rendering: episodes loop forever with a new seed "
-			"each run, Enter skips to the next run, Ctrl+C quits. Human mode does not "
-			"record results."
+			"each run starting at --seed-min, Enter skips to the next run, Ctrl+C quits. "
+			"Human mode does not record results."
 		),
 	)
 	parser.add_argument(
@@ -184,10 +172,10 @@ def parse_args() -> argparse.Namespace:
 		action="store_true",
 		help=(
 			"Greedily evaluate every checkpoint of the experiment on the same seeds "
-			"(--seed-start/--seed-count) and print one row per checkpoint. Use it to "
+			"(--seed-min/--seed-max) and print one row per checkpoint. Use it to "
 			"find where a run's policy collapsed. Writes sweep/sweep_<sweep-name>.csv "
-			"inside --run-dir (or next to this script if --run-dir is not given) "
-			"unless --no-record."
+			"inside the training run directory (found from the checkpoints' "
+			"metadata; next to this script if it can't be found) unless --no-record."
 		),
 	)
 	parser.add_argument(
@@ -370,8 +358,15 @@ def select_model_path(args: argparse.Namespace, config: Config) -> Path:
 
 
 # --------------------------------------------------------------------------- #
-# Evaluation
+# Run directory / training position
 # --------------------------------------------------------------------------- #
+
+def read_meta(model_path: Path, device: str) -> dict[str, Any]:
+	"""The `meta` block (run_dir, episodes, total_steps, ...) stored in a model file."""
+	checkpoint = load_checkpoint(model_path, device)
+	meta = checkpoint.get("meta") if isinstance(checkpoint, dict) else None
+	return meta if isinstance(meta, dict) else {}
+
 
 def episode_from_path(path: Path) -> int | None:
 	"""Training episode encoded in a checkpoint file name (…epi500…), if any."""
@@ -379,21 +374,44 @@ def episode_from_path(path: Path) -> int | None:
 	return int(match.group(1)) if match else None
 
 
+def seed_from_path(path: Path) -> int | None:
+	"""Training seed encoded in a model file name (…_seed42…), if any."""
+	matches = SEED_PATTERN.findall(path.stem)
+	return int(matches[-1]) if matches else None
+
+
+def resolve_run_dir(
+	meta: dict[str, Any],
+	exp_name: str,
+	model_path: Path,
+	train_seed: int | None,
+) -> Path | None:
+	"""
+	Find the training run a model came from, the way train.py finds it on resume:
+	the run_dir stored in the model's meta. Models without it fall back to the
+	newest run of the experiment (and training seed) under RunLogger's root.
+	"""
+	recorded = meta.get("run_dir")
+	if recorded and Path(recorded).is_dir():
+		return Path(recorded)
+
+	seed = seed_from_path(model_path)
+	if seed is None:
+		seed = train_seed
+	return RunLogger.find_run_dir(exp_name, seed)
+
+
 def read_training_position(
 	run_dir: Path | None,
 	model_path: Path | None = None,
 ) -> tuple[int, int]:
 	"""
-	Read the training episode and environment-step count of the evaluated model
-	from metrics.csv.
+	Fallback for models without metadata: read the training episode and
+	environment-step count from metrics.csv.
 
 	For a checkpoint whose name contains epiN, the last metrics row with
-	episode <= N is used, so evaluating an old checkpoint is logged at that
-	checkpoint's position. For final models (or names without epiN) the last
+	episode <= N is used. For final models (or names without epiN) the last
 	row is used.
-
-	These values identify the training checkpoint/model being evaluated.
-	They are not the episode number or step count of the evaluation episode.
 	"""
 	if run_dir is None:
 		return 0, 0
@@ -427,42 +445,32 @@ def read_training_position(
 	)
 
 
-def append_eval_row(
-	eval_path: Path,
-	*,
-	episode: int,
-	env_steps: int,
-	eval_seed: int,
-	reward: float,
-	length: int,
-) -> None:
-	"""Append one evaluation result without replacing existing results."""
-	eval_path.parent.mkdir(parents=True, exist_ok=True)
-	write_header = not eval_path.exists() or eval_path.stat().st_size == 0
+def training_position(
+	meta: dict[str, Any],
+	run_dir: Path,
+	model_path: Path,
+) -> tuple[int, int]:
+	"""
+	(episode, env_steps) of the evaluated model in its training run. These
+	identify the model; they are not the evaluation episode's own numbers.
+	"""
+	episode = meta.get("episodes")
+	env_steps = meta.get("total_steps")
+	if episode is not None and env_steps is not None:
+		return int(episode), int(env_steps)
+	return read_training_position(run_dir, model_path)
 
-	with eval_path.open("a", newline="", encoding="utf-8") as file:
-		writer = csv.DictWriter(file, fieldnames=EVAL_FIELDS)
 
-		if write_header:
-			writer.writeheader()
-
-		writer.writerow(
-			{
-				"episode": episode,
-				"env_steps": env_steps,
-				"eval_seed": eval_seed,
-				"reward": reward,
-				"length": length,
-			}
-		)
-
+# --------------------------------------------------------------------------- #
+# Evaluation
+# --------------------------------------------------------------------------- #
 
 def load_model(
 	model_path: Path,
 	config: Config,
 	device: str,
-) -> DQNetworkTestAgent:
-	"""Build the evaluation network and load the saved DQN state."""
+) -> tuple[DQNetworkTestAgent, dict[str, Any]]:
+	"""Build the evaluation network and load the saved DQN state. Returns (agent, meta)."""
 	network = ConvNet(
 		in_channels=config.in_channels,
 		output_dim=5,
@@ -485,7 +493,9 @@ def load_model(
 	agent.load_save_state(checkpoint)
 
 	agent.network.eval()
-	return agent
+
+	meta = checkpoint.get("meta")
+	return agent, meta if isinstance(meta, dict) else {}
 
 
 def make_env(config: Config, render_mode: str) -> gym.Env:
@@ -593,7 +603,6 @@ def sweep_checkpoints(
 	args: argparse.Namespace,
 	config: Config,
 	device: str,
-	run_dir: Path | None,
 ) -> None:
 	"""
 	Evaluate every checkpoint of the experiment on the same seeds and print one
@@ -603,7 +612,8 @@ def sweep_checkpoints(
 	which is what a car that never moves scores (about -93).
 
 	The result is written to sweep/sweep_<name>.csv only when recording is
-	enabled (no --no-record).
+	enabled (no --no-record). The run directory is found from the newest swept
+	checkpoint, like a normal evaluation.
 	"""
 	def episode_of(path: Path) -> int:
 		episode = episode_from_path(path)
@@ -622,9 +632,15 @@ def sweep_checkpoints(
 		)
 
 	# Resolved up front so a name clash fails before the (long) sweep starts.
-	out_path = None if args.no_record else resolve_sweep_path(args, run_dir)
+	out_path = None
+	if not args.no_record:
+		newest = files[-1]
+		run_dir = resolve_run_dir(
+			read_meta(newest, "cpu"), args.exp_name, newest, args.train_seed
+		)
+		out_path = resolve_sweep_path(args, run_dir)
 
-	seeds = list(range(args.seed_start, args.seed_start + args.seed_count))
+	seeds = list(range(args.seed_min, args.seed_max + 1))
 	env = make_env(config, "none")
 	rows: list[dict[str, float | int | str]] = []
 
@@ -636,7 +652,7 @@ def sweep_checkpoints(
 
 	try:
 		for path in files:
-			agent = load_model(path, config, device)
+			agent, _ = load_model(path, config, device)
 
 			rewards: list[float] = []
 			lengths: list[int] = []
@@ -720,7 +736,7 @@ def run_interactive(
 
 	try:
 		while True:
-			seed = args.seed_start + run
+			seed = args.seed_min + run
 			skip.clear()
 
 			reward, length, skipped = evaluate_episode(
@@ -754,13 +770,15 @@ def run_interactive(
 def run_evaluation(
 	*,
 	agent: DQNetworkTestAgent,
+	meta: dict[str, Any],
 	config: Config,
 	args: argparse.Namespace,
 	model_path: Path,
 	run_dir: Path | None,
 ) -> None:
 	"""
-	Run interactive testing or seeded evaluation episodes.
+	Run interactive testing or seeded evaluation episodes (one per seed in
+	[seed_min, seed_max]).
 
 	Seeded episodes are appended to <run_dir>/eval.csv unless --no-record is set.
 	"""
@@ -775,17 +793,21 @@ def run_evaluation(
 
 		if record and run_dir is None:
 			raise ValueError(
-				"--run-dir is required so evaluation results can be appended to "
-				"the training run's eval.csv. Pass --no-record to skip recording."
+				"Could not find the training run for this model: its metadata has no "
+				"run_dir, and no run folder for it exists under the runs root. Run from "
+				"the same directory as training, or pass --no-record."
 			)
 
 		eval_path: Path | None = None
+		logger: Any = nullcontext()
 		episode = env_steps = 0
 
 		if record:
 			assert run_dir is not None
+			episode, env_steps = training_position(meta, run_dir, model_path)
 			eval_path = run_dir / "eval.csv"
-			episode, env_steps = read_training_position(run_dir, model_path)
+			# Append-only: never truncates the training run's metrics/eval rows.
+			logger = RunLogger.for_eval(run_dir)
 			print(
 				f"Recording to {eval_path} "
 				f"(training position: episode={episode}, env_steps={env_steps})"
@@ -793,37 +815,35 @@ def run_evaluation(
 		else:
 			print("Recording disabled (--no-record): eval.csv will not be written.")
 
-		# Every evaluation episode gets its own unique, consecutive seed.
-		total_episodes = args.seed_count * args.episodes
+		seeds = range(args.seed_min, args.seed_max + 1)
+		total_episodes = len(seeds)
 		rewards: list[float] = []
 
-		for completed in range(total_episodes):
-			seed = args.seed_start + completed
-
-			reward, length, _ = evaluate_episode(
-				env,
-				agent,
-				seed=seed,
-				debug_actions=args.debug_actions,
-				epsilon=args.eval_epsilon,
-			)
-
-			if eval_path is not None:
-				append_eval_row(
-					eval_path,
-					episode=episode,
-					env_steps=env_steps,
-					eval_seed=seed,
-					reward=reward,
-					length=length,
+		with logger as eval_log:
+			for completed, seed in enumerate(seeds):
+				reward, length, _ = evaluate_episode(
+					env,
+					agent,
+					seed=seed,
+					debug_actions=args.debug_actions,
+					epsilon=args.eval_epsilon,
 				)
 
-			rewards.append(reward)
+				if eval_log is not None:
+					eval_log.log_eval_episode(
+						episode=episode,
+						env_steps=env_steps,
+						eval_seed=seed,
+						reward=reward,
+						length=length,
+					)
 
-			print(
-				f"[{completed + 1}/{total_episodes}] "
-				f"seed={seed} reward={reward:.2f} length={length}"
-			)
+				rewards.append(reward)
+
+				print(
+					f"[{completed + 1}/{total_episodes}] "
+					f"seed={seed} reward={reward:.2f} length={length}"
+				)
 
 		if eval_path is not None:
 			print(f"\nEvaluation complete. Results appended to: {eval_path}")
@@ -840,22 +860,8 @@ def run_evaluation(
 def main() -> None:
 	args = parse_args()
 
-	if args.episodes < 1:
-		raise ValueError("--episodes must be at least 1.")
-
-	if args.seed_count < 1:
-		raise ValueError("--seed-count must be at least 1.")
-
-	if (
-		args.render_mode == "none"
-		and args.run_dir is None
-		and not args.no_record
-		and not args.sweep
-	):
-		raise ValueError(
-			"--run-dir is required for recorded evaluation. "
-			"Pass --no-record to evaluate without recording."
-		)
+	if args.seed_max < args.seed_min:
+		raise ValueError("--seed-max must be >= --seed-min.")
 
 	if args.sweep and args.render_mode == "human":
 		raise ValueError("--sweep can't be combined with --render-mode human.")
@@ -871,14 +877,9 @@ def main() -> None:
 		)
 		print(f"Note: eval epsilon = {args.eval_epsilon} (not purely greedy). {note}")
 
-	random.seed(args.seed_start)
-	np.random.seed(args.seed_start)
-	torch.manual_seed(args.seed_start)
-
-	run_dir = resolve_path(args.run_dir) if args.run_dir else None
-
-	if run_dir is not None and not run_dir.is_dir():
-		raise FileNotFoundError(f"Training run directory does not exist: {run_dir}")
+	random.seed(args.seed_min)
+	np.random.seed(args.seed_min)
+	torch.manual_seed(args.seed_min)
 
 	config_path = (
 		resolve_path(args.config_path)
@@ -903,13 +904,22 @@ def main() -> None:
 	if args.sweep:
 		print(f"Experiment: {args.exp_name}")
 		print(f"Device: {device}")
-		sweep_checkpoints(args, config, device, run_dir)
+		sweep_checkpoints(args, config, device)
 		return
 
 	model_path = select_model_path(args, config)
 
 	if not model_path.is_file():
 		raise FileNotFoundError(f"Model checkpoint not found: {model_path}")
+
+	agent, meta = load_model(model_path, config, device)
+
+	recording = not args.no_record and args.render_mode != "human"
+	run_dir = (
+		resolve_run_dir(meta, args.exp_name, model_path, args.train_seed)
+		if recording
+		else None
+	)
 
 	print(f"Experiment: {args.exp_name}")
 	print(f"Model:  {model_path}")
@@ -919,10 +929,9 @@ def main() -> None:
 	if run_dir is not None:
 		print(f"Run:    {run_dir}")
 
-	agent = load_model(model_path, config, device)
-
 	run_evaluation(
 		agent=agent,
+		meta=meta,
 		config=config,
 		args=args,
 		model_path=model_path,

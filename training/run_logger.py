@@ -8,7 +8,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Self, TextIO
+
+DEFAULT_ROOT = "runs"
 
 METRIC_FIELDS = ("episode", "env_steps", "reward", "length", "epsilon", "loss")
 EVAL_FIELDS = ("episode", "env_steps", "eval_seed", "reward", "length")
@@ -43,6 +45,13 @@ class RunLogger:
 	new one. Rows logged after the checkpoint being resumed from are dropped, so
 	redone episodes are not duplicated. If `resume_dir` is missing or invalid, a
 	new run folder is created.
+
+	Pass `eval_only=True` (with `resume_dir`) to attach to an existing run purely
+	to append evaluation rows to its eval.csv. Nothing is truncated or rewritten:
+	metrics.csv and run_info.json are left alone, no folders are created, and a
+	missing run folder is an error. `RunLogger.for_eval(run_dir)` is a shortcut.
+
+	`self.root` is the folder holding all runs (<root>/<experiment>/<run>).
 	"""
 
 	def __init__(
@@ -50,26 +59,30 @@ class RunLogger:
 		experiment: str,
 		seed: int,
 		config: dict[str, Any],
-		root: str | Path = "runs",
+		root: str | Path = DEFAULT_ROOT,
 		device: str | None = None,
 		checkpoint_path: str | Path = "checkpoints",
 		flush_every: int = 1,
 		resume_dir: str | Path | None = None,
 		resume_from_episode: int = 0,
 		resume_env_steps: int = 0,
+		eval_only: bool = False,
 	) -> None:
 		if flush_every < 1:
 			raise ValueError("flush_every must be at least 1.")
 
 		self.experiment = experiment
 		self.seed = seed
+		self.root = Path(root)
+		self.eval_only = eval_only
 
 		self._checkpoint_path = Path(checkpoint_path)
-		self._checkpoint_path.mkdir(parents=True, exist_ok=True)
 		self._flush_every = flush_every
 		self._metrics_buffer: list[list[Any]] = []
 		self._start = time.monotonic()
 		self._prior_duration = 0.0
+		self._metrics_file: TextIO | None = None
+		self._metrics: Any = None
 
 		resume_path = Path(resume_dir) if resume_dir is not None else None
 		resuming = (
@@ -77,6 +90,22 @@ class RunLogger:
 			and (resume_path / "run_info.json").exists()
 			and (resume_path / "metrics.csv").exists()
 		)
+
+		if eval_only:
+			if not resuming:
+				raise FileNotFoundError(
+					f"{resume_path} is not an existing training run "
+					"(needs run_info.json and metrics.csv)."
+				)
+			assert resume_path is not None
+			self.dir = resume_path
+			self._info = json.loads((self.dir / "run_info.json").read_text())
+			self._eval_file, self._eval = self._open_csv(
+				"eval.csv", EVAL_FIELDS, append=True
+			)
+			return
+
+		self._checkpoint_path.mkdir(parents=True, exist_ok=True)
 
 		if resuming:
 			assert resume_path is not None
@@ -106,7 +135,7 @@ class RunLogger:
 			self._write_json("run_info.json", self._info)
 		else:
 			stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-			self.dir = Path(root) / experiment / f"{stamp}_seed{seed}"
+			self.dir = self.root / experiment / f"{stamp}_seed{seed}"
 			self.dir.mkdir(parents=True, exist_ok=False)
 
 			status = _git(
@@ -135,6 +164,40 @@ class RunLogger:
 			"eval.csv", EVAL_FIELDS, append=resuming
 		)
 
+	@classmethod
+	def for_eval(cls, run_dir: str | Path) -> Self:
+		"""Attach to an existing run folder just to append evaluation rows."""
+		run_dir = Path(run_dir)
+		info_path = run_dir / "run_info.json"
+		info = json.loads(info_path.read_text()) if info_path.is_file() else {}
+		return cls(
+			experiment=info.get("experiment", run_dir.parent.name),
+			seed=int(info.get("seed", 0)),
+			config={},
+			root=run_dir.parent.parent,  # <root>/<experiment>/<run>
+			resume_dir=run_dir,
+			eval_only=True,
+		)
+
+	@staticmethod
+	def find_run_dir(
+		experiment: str,
+		seed: int | None = None,
+		root: str | Path = DEFAULT_ROOT,
+	) -> Path | None:
+		"""Newest run folder of an experiment (of one training seed, if given)."""
+		exp_dir = Path(root) / experiment
+		if not exp_dir.is_dir():
+			return None
+
+		pattern = f"*_seed{seed}" if seed is not None else "*"
+		runs = [
+			p for p in exp_dir.glob(pattern)
+			if p.is_dir() and (p / "metrics.csv").is_file()
+		]
+		# Folder names start with a timestamp, so the largest name is the newest.
+		return max(runs, key=lambda p: p.name) if runs else None
+
 	@property
 	def checkpoint_path(self) -> Path:
 		return self._checkpoint_path
@@ -150,6 +213,8 @@ class RunLogger:
 		loss: float | None = None,
 	) -> None:
 		"""Buffers one finished training episode; writes a batch every `flush_every` episodes."""
+		if self.eval_only:
+			raise RuntimeError("log_episode() is not available in eval_only mode.")
 		self._metrics_buffer.append(
 			[episode, env_steps, reward, length, _blank(epsilon), _blank(loss)]
 		)
@@ -159,18 +224,27 @@ class RunLogger:
 	def log_eval_episode(
 		self,
 		*,
+		episode: int,
 		env_steps: int,
 		eval_seed: int,
 		reward: float,
 		length: int,
 	) -> None:
-		"""Logs one evaluation episode (run with a fixed, separate seed)."""
-		self._eval.writerow([env_steps, eval_seed, reward, length])
+		"""
+		Logs one evaluation episode (run with a fixed, separate seed).
+
+		`episode`/`env_steps` are the training position of the evaluated model.
+		"""
+		self._eval.writerow([episode, env_steps, eval_seed, reward, length])
 		self._eval_file.flush()
 
 	def flush(self) -> None:
 		"""Writes any buffered training rows to metrics.csv in one go."""
-		if self._metrics_file.closed or not self._metrics_buffer:
+		if (
+			self._metrics_file is None
+			or self._metrics_file.closed
+			or not self._metrics_buffer
+		):
 			return
 		self._metrics.writerows(self._metrics_buffer)
 		self._metrics_file.flush()
@@ -178,8 +252,15 @@ class RunLogger:
 
 	def finish(self, status: str = "completed") -> None:
 		"""Writes remaining rows, closes the files and records duration and final status."""
-		if self._metrics_file.closed:
+		if self._eval_file.closed:
 			return
+
+		if self.eval_only:
+			# Attached only to append eval rows: leave run_info.json untouched.
+			self._eval_file.close()
+			return
+
+		assert self._metrics_file is not None
 		self.flush()
 		self._info["status"] = status
 		self._info["finished_at"] = datetime.now().isoformat(timespec="seconds")
@@ -211,7 +292,9 @@ class RunLogger:
 			json.dumps(data, indent=2, default=str) + "\n"
 		)
 
-	def _open_csv(self, name: str, fields: tuple[str, ...], append: bool = False):
+	def _open_csv(
+		self, name: str, fields: tuple[str, ...], append: bool = False
+	) -> tuple[TextIO, Any]:
 		path = self.dir / name
 		if append and path.exists() and path.stat().st_size > 0:
 			file = open(path, "a", newline="")

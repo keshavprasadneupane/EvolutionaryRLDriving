@@ -32,26 +32,19 @@ ehthumbs.db
 .pytest_cache/
 *.log
 
-# --- Reinforcement Learning & Training Artifacts ---
-# Exclude trained model weights and training state (keep code, not binaries).
-# A DQN checkpoint is ~15 MB, and far larger if the replay buffer was saved.
 heavy_models/
 models/
 checkpoints/
-
-# PyTorch / SB3 weights or saved states
+checkpoint/
 *.pt
 *.pth
 *.ckpt
 *.zip
 
-# --- Logging & Monitoring ---
-# TensorBoard runs and event logs
+
 tensorboard_logs/
 *.tfevents.*
 
-# --- Agent Recordings & Evaluation Outputs ---
-# Captured gameplay videos, GIFs, and evaluation logs
 videos/
 recordings/
 eval_results/

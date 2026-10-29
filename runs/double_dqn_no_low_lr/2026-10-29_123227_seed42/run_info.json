@@ -1,0 +1,19 @@
+{
+  "experiment": "double_dqn_no_low_lr",
+  "seed": 42,
+  "started_at": "2026-10-29T12:32:27",
+  "status": "completed",
+  "git_commit": "58d42efdcc477436b923669b460c2839543112e2",
+  "git_dirty": true,
+  "device": "cuda",
+  "platform": "Linux-7.2.9-2-cachyos-x86_64-with-glibc2.44",
+  "versions": {
+    "python": "3.12.13",
+    "torch": "2.14.1+cu130",
+    "numpy": "2.5.4",
+    "gymnasium": "1.4.0"
+  },
+  "command": "/home/keshav/Projects/AI_ML/Gymnasium/EvolutionaryRLDriving/workflows/baseline/train.py",
+  "finished_at": "2026-10-29T14:45:00",
+  "duration_seconds": 7953.7
+}

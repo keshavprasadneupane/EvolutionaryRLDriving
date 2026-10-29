@@ -26,7 +26,6 @@ CURRENT_DIR = Path(__file__).parent
 DEFAULT_CONFIG_PATH = "config.json"
 
 CHECKPOINT_ROOT = CURRENT_DIR / "checkpoint"
-DEFAULT_EXP_NAME = "double_dqn"
 DEFAULT_SEED = 42
 
 SAVE_REPLAY = False
@@ -70,15 +69,6 @@ def parse_args() -> argparse.Namespace:
 		"--fresh",
 		action="store_true",
 		help="Ignore any existing checkpoint and start training from scratch.",
-	)
-	parser.add_argument(
-		"--exp-name",
-		type=str,
-		default=DEFAULT_EXP_NAME,
-		help=(
-			"Experiment name. Checkpoints go to checkpoint/<exp-name>/ and the "
-			"final model to <save_model_path>/<exp-name>/."
-		),
 	)
 	parser.add_argument(
 		"--seed",
@@ -209,9 +199,13 @@ def load_resume_checkpoint(
 	return config.merged_with_checkpoint(meta), checkpoint, latest
 
 
-def train(config: Config, exp_name: str, seed: int, fresh: bool = False) -> None:
+def train(config: Config, seed: int, fresh: bool = False) -> None:
 	checkpoint: dict[str, Any] | None = None
 	latest: Path | None = None
+
+	# Read once up front so paths and filenames stay consistent for the whole run,
+	# regardless of what the checkpoint merge does to the config afterwards.
+	exp_name = config.exp_name
 	ckpt_dir = get_checkpoint_dir(exp_name)
 
 	print(f"-> Experiment: {exp_name} | seed: {seed}")
@@ -404,7 +398,7 @@ def main():
 	config.print_config()
 	print(f"Time to reach min epsilon: {episode_to_reach_min_epsilon(config.initial_epsilon, config.min_epsilon, config.epsilon_decay)} episodes")
 
-	train(config, exp_name=args.exp_name, seed=args.seed, fresh=args.fresh)
+	train(config, seed=args.seed, fresh=args.fresh)
 
 
 if __name__ == "__main__":

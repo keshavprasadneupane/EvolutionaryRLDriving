@@ -4,6 +4,9 @@ from utility.config_base import ConfigBase
 
 @dataclass
 class Config(ConfigBase):
+	# Experiment
+	exp_name: str = "double_dqn"  # checkpoints -> checkpoint/<exp_name>/, final model -> <save_model_path>/<exp_name>/
+
 	# Training & Execution Control
 	epochs: int = 10_000
 	target_update_freq: int = 500
@@ -40,7 +43,7 @@ class Config(ConfigBase):
 		{"in_channels", "hidden_dim", }
 	)
 	OVERWRITABLE_FIELDS: ClassVar[frozenset[str]] = frozenset(
-		{"epochs","log_interval","save_interval","device","save_model_path"}
+		{"exp_name", "epochs", "log_interval", "save_interval", "device", "save_model_path"}
 	)
 	BOUNDS: ClassVar[dict[str, tuple[Any, Any]]] = {
 		"epochs": (1, None),
