@@ -32,7 +32,6 @@ class ConvNet(NNewtork):
 			nn.Conv2d(16, 32, kernel_size=4, stride=2),
 			nn.ReLU(),
 		)
-
 		n_features = 32 * 9 * 9
 
 		fc = nn.Sequential(
@@ -47,14 +46,12 @@ class ConvNet(NNewtork):
 			fc,
 		)
 
-		# 2. Call super().__init__() to initialize nn.Module and NNewtork base features
 		super().__init__(
 			model=sequential_nn,
 			loss_function=loss_function,
 			device=device,
 		)
 
-		# 3. Safe to assign attributes referencing modules after super().__init__()
 		self.conv = conv
 		self.fc = fc
 		self._n_features = n_features

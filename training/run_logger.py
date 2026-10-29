@@ -11,7 +11,7 @@ from types import TracebackType
 from typing import Any, Self
 
 METRIC_FIELDS = ("episode", "env_steps", "reward", "length", "epsilon", "loss")
-EVAL_FIELDS = ("env_steps", "eval_seed", "reward", "length")
+EVAL_FIELDS = ("episode", "env_steps", "eval_seed", "reward", "length")
 
 
 def _git(*args: str) -> str | None:

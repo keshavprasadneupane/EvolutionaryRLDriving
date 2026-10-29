@@ -11,9 +11,8 @@ class CarRacing(gym.Env):
 	Fully compatible with Gymnasium's AsyncVectorEnv.
 	"""
 
-	def __init__(self, max_grass_frames: int = 50, skip: int = 4, n_frames: int = 4):
-		self.env = gym.make("CarRacing-v3", continuous=False)
-		self.max_grass_frames = max_grass_frames
+	def __init__(self, render_mode: str = "state_pixels", skip: int = 4, n_frames: int = 4):
+		self.env = gym.make("CarRacing-v3", continuous=False, render_mode=render_mode)
 		self.skip = skip
 		
 		self.action_space = self.env.action_space

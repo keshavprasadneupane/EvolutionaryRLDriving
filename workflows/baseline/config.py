@@ -37,7 +37,7 @@ class Config(ConfigBase):
 	save_model_path: str = "models"
 
 	CRITICAL_FIELDS: ClassVar[frozenset[str]] = frozenset(
-		{"in_channels", "hidden_dim", "device"}
+		{"in_channels", "hidden_dim", }
 	)
 	OVERWRITABLE_FIELDS: ClassVar[frozenset[str]] = frozenset(
 		{"epochs","log_interval","save_interval","device","save_model_path"}

@@ -1,0 +1,35 @@
+{
+  "experiment": "dqn_carracing_baseline",
+  "seed": 42,
+  "started_at": "2026-10-28T16:25:15",
+  "status": "completed",
+  "git_commit": "92c319b03db62fa4837693022ec0681b7d549001",
+  "git_dirty": true,
+  "device": "cuda",
+  "platform": "Linux-7.2.9-2-cachyos-x86_64-with-glibc2.44",
+  "versions": {
+    "python": "3.12.13",
+    "torch": "2.14.1+cu130",
+    "numpy": "2.5.4",
+    "gymnasium": "1.4.0"
+  },
+  "command": "/home/keshav/Projects/AI_ML/Gymnasium/EvolutionaryRLDriving/workflows/baseline/train.py",
+  "duration_seconds": 8087.7,
+  "resumes": [
+    {
+      "resumed_at": "2026-10-28T17:18:55",
+      "from_episode": 912,
+      "from_env_steps": 230718,
+      "git_commit": "92c319b03db62fa4837693022ec0681b7d549001",
+      "command": "/home/keshav/Projects/AI_ML/Gymnasium/EvolutionaryRLDriving/workflows/baseline/train.py"
+    },
+    {
+      "resumed_at": "2026-10-29T07:19:34",
+      "from_episode": 1432,
+      "from_env_steps": 362694,
+      "git_commit": "7d7a772d197bb85144a162e1ff208efae0cf6729",
+      "command": "/home/keshav/Projects/AI_ML/Gymnasium/EvolutionaryRLDriving/workflows/baseline/train.py"
+    }
+  ],
+  "finished_at": "2026-10-29T08:10:11"
+}

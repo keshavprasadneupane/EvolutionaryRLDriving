@@ -47,7 +47,6 @@ checkpoints/
 
 # --- Logging & Monitoring ---
 # TensorBoard runs and event logs
-runs/
 tensorboard_logs/
 *.tfevents.*
 
@@ -59,4 +58,3 @@ eval_results/
 *.mp4
 *.avi
 *.gif
-*.csv

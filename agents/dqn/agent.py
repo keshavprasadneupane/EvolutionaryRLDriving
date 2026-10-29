@@ -299,3 +299,35 @@ class DQNetworkTrainAgent(DQNetworkAgent):
 			replay_state = state.get("replay_buffer_state")
 			if replay_state is not None:
 				self.replay_buffer.load_save_state(replay_state)
+
+
+
+class DQNetworkTestAgent(DQNetworkAgent):
+	"""DQN inference agent for evaluation and testing."""
+
+	def __init__(self, *, network: NNewtork) -> None:
+		super().__init__(network=network)
+		self.network.eval()
+
+	def load_save_state(self, state: dict[str, Any]) -> None:
+		"""
+		Load the policy network weights from a saved training-agent state.
+
+		Only the policy network is required for inference; target-network,
+		optimizer, and replay-buffer states are not needed.
+		"""
+		if "network_state_dict" not in state:
+			raise KeyError(
+				"Checkpoint does not contain 'network_state_dict'."
+			)
+
+		self.network.load_state_dict(state["network_state_dict"])
+		self.network.eval()
+
+	@torch.no_grad()
+	def get_action(self, state: np.ndarray) -> tuple[int, float]:
+		"""Return the greedy action and its estimated Q-value."""
+		self.network.eval()
+		q_values = self.network.predict(state[np.newaxis, ...])[0]
+		action = int(np.argmax(q_values))
+		return action, float(q_values[action])

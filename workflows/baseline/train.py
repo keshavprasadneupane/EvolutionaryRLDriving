@@ -24,17 +24,44 @@ from environments.car_race import CarRacing
 
 CURRENT_DIR = Path(__file__).parent
 DEFAULT_CONFIG_PATH = "config.json"
-CHECKPOINT_DIR = CURRENT_DIR / "checkpoints"
-POINTER_NAME = "current_checkpoint.txt"
-EXP_NAME = "dqn_carracing_baseline"
-SEED = 42
+
+CHECKPOINT_ROOT = CURRENT_DIR / "checkpoint"
+DEFAULT_EXP_NAME = "double_dqn"
+DEFAULT_SEED = 42
+
 SAVE_REPLAY = False
 TRAIN_EVERY = 3  # train every N environment steps (not episodes). This is a hyperparameter that can be tuned for performance.
 NUM_ENVS = 10    # Number of parallel CPU environments for AsyncVectorEnv
 
-torch.manual_seed(SEED)
-random.seed(SEED)
 torch.backends.cudnn.benchmark = True
+
+
+def get_checkpoint_dir(exp_name: str) -> Path:
+	"""Directory holding every checkpoint of one experiment."""
+	return CHECKPOINT_ROOT / exp_name
+
+
+def get_checkpoint_filename(exp_name: str, episodes: int, seed: int) -> str:
+	return f"{exp_name}_checkpoint_epi{episodes}_seed{seed}.pth"
+
+
+def get_pointer_name(seed: int) -> str:
+	# One pointer per seed, so runs with different seeds in the same experiment
+	# directory never resume from each other's checkpoints.
+	return f"current_checkpoint_seed{seed}.txt"
+
+
+def get_final_model_dir(config: Config, exp_name: str) -> Path:
+	return CURRENT_DIR / config.save_model_path / exp_name
+
+
+def get_final_model_path(config: Config, exp_name: str, seed: int) -> Path:
+	return get_final_model_dir(config, exp_name) / f"{exp_name}_final_seed{seed}.pth"
+
+
+def set_seed(seed: int) -> None:
+	torch.manual_seed(seed)
+	random.seed(seed)
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,6 +70,21 @@ def parse_args() -> argparse.Namespace:
 		"--fresh",
 		action="store_true",
 		help="Ignore any existing checkpoint and start training from scratch.",
+	)
+	parser.add_argument(
+		"--exp-name",
+		type=str,
+		default=DEFAULT_EXP_NAME,
+		help=(
+			"Experiment name. Checkpoints go to checkpoint/<exp-name>/ and the "
+			"final model to <save_model_path>/<exp-name>/."
+		),
+	)
+	parser.add_argument(
+		"--seed",
+		type=int,
+		default=DEFAULT_SEED,
+		help="Random seed. It is appended to every checkpoint/final-model filename.",
 	)
 	return parser.parse_args()
 
@@ -54,7 +96,7 @@ def make_env(config: Config, seed_offset: int):
 	return _thunk
 
 
-def create_agent(config: Config) -> DQNetworkTrainAgent:
+def create_agent(config: Config, seed: int) -> DQNetworkTrainAgent:
 	"""Creates and initializes the DQN training agent for CarRacing-v3."""
 	network = ConvNet(
 		in_channels=config.in_channels,
@@ -72,7 +114,8 @@ def create_agent(config: Config) -> DQNetworkTrainAgent:
 		replay_capacity=config.replay_capacity,
 		batch_size=config.replay_batch_size,
 		warmup=config.replay_warmup,
-		seed=SEED,
+		double_dqn=True,
+		seed=seed,
 	)
 
 
@@ -100,13 +143,15 @@ def save_checkpoint(
 	agent: DQNetworkTrainAgent,
 	config: Config,
 	ckpt_dir: Path,
+	exp_name: str,
+	seed: int,
 	completed_episodes: int,
 	epsilon: float,
 	total_steps: int,
 	run_dir: Path,
 ) -> Path:
 	ckpt_dir.mkdir(parents=True, exist_ok=True)
-	ckpt_path = ckpt_dir / f"{EXP_NAME}_checkpoint_epi{completed_episodes}.pth"
+	ckpt_path = ckpt_dir / get_checkpoint_filename(exp_name, completed_episodes, seed)
 
 	save_state = agent.get_save_state(include_replay=SAVE_REPLAY)
 	save_state["meta"] = {
@@ -121,12 +166,12 @@ def save_checkpoint(
 	save_the_model(tmp_path, save_state)
 	os.replace(tmp_path, ckpt_path)
 
-	_atomic_write_text(ckpt_dir / POINTER_NAME, str(ckpt_path))
+	_atomic_write_text(ckpt_dir / get_pointer_name(seed), str(ckpt_path))
 	return ckpt_path
 
 
-def find_latest_checkpoint(ckpt_dir: Path) -> Path | None:
-	pointer = ckpt_dir / POINTER_NAME
+def find_latest_checkpoint(ckpt_dir: Path, seed: int) -> Path | None:
+	pointer = ckpt_dir / get_pointer_name(seed)
 	if not pointer.exists():
 		return None
 	recorded = Path(pointer.read_text().strip())
@@ -136,10 +181,14 @@ def find_latest_checkpoint(ckpt_dir: Path) -> Path | None:
 	return local if local.exists() else None
 
 
-def load_resume_checkpoint(config: Config) -> tuple[Config, dict[str, Any] | None, Path | None]:
-	latest = find_latest_checkpoint(CHECKPOINT_DIR)
+def load_resume_checkpoint(
+	config: Config,
+	ckpt_dir: Path,
+	seed: int,
+) -> tuple[Config, dict[str, Any] | None, Path | None]:
+	latest = find_latest_checkpoint(ckpt_dir, seed)
 	if latest is None:
-		print("-> No checkpoint found. Starting fresh.")
+		print(f"-> No checkpoint found in {ckpt_dir} for seed {seed}. Starting fresh.")
 		return config, None, None
 
 	try:
@@ -160,14 +209,18 @@ def load_resume_checkpoint(config: Config) -> tuple[Config, dict[str, Any] | Non
 	return config.merged_with_checkpoint(meta), checkpoint, latest
 
 
-def train(config: Config, fresh: bool = False) -> None:
+def train(config: Config, exp_name: str, seed: int, fresh: bool = False) -> None:
 	checkpoint: dict[str, Any] | None = None
 	latest: Path | None = None
+	ckpt_dir = get_checkpoint_dir(exp_name)
+
+	print(f"-> Experiment: {exp_name} | seed: {seed}")
+	print(f"-> Checkpoint directory: {ckpt_dir}")
 
 	if fresh:
 		print("-> --fresh specified. Starting fresh.")
 	else:
-		config, checkpoint, latest = load_resume_checkpoint(config)
+		config, checkpoint, latest = load_resume_checkpoint(config, ckpt_dir, seed)
 
 	if checkpoint is not None:
 		print("\n\n-> Effective configuration after merging with checkpoint:")
@@ -176,7 +229,7 @@ def train(config: Config, fresh: bool = False) -> None:
 	env = gym.vector.AsyncVectorEnv([
 		make_env(config, i) for i in range(NUM_ENVS)
 	])
-	agent = create_agent(config)
+	agent = create_agent(config, seed)
 
 	current_epsilon = config.initial_epsilon
 	total_steps = 0
@@ -211,11 +264,11 @@ def train(config: Config, fresh: bool = False) -> None:
 	completed_episodes = start_epi
 
 	with RunLogger(
-		EXP_NAME,
-		seed=SEED,
+		exp_name,
+		seed=seed,
 		config=config.to_dict(),
 		device=config.device,
-		checkpoint_path=CHECKPOINT_DIR,
+		checkpoint_path=ckpt_dir,
 		flush_every=config.log_interval,
 		resume_dir=resume_run_dir,
 		resume_from_episode=start_epi,
@@ -223,7 +276,7 @@ def train(config: Config, fresh: bool = False) -> None:
 	) as run:
 		pbar: Any = None
 		try:
-			states, _ = env.reset(seed=[SEED + i + start_epi * NUM_ENVS for i in range(NUM_ENVS)])
+			states, _ = env.reset(seed=[seed + i + start_epi * NUM_ENVS for i in range(NUM_ENVS)])
 			env_rewards = np.zeros(NUM_ENVS, dtype=np.float32)
 			env_lengths = np.zeros(NUM_ENVS, dtype=np.int32)
 			
@@ -303,7 +356,7 @@ def train(config: Config, fresh: bool = False) -> None:
 
 						if completed_episodes % config.save_interval == 0:
 							ckpt_path = save_checkpoint(
-								agent, config, CHECKPOINT_DIR,
+								agent, config, ckpt_dir, exp_name, seed,
 								completed_episodes, current_epsilon, total_steps, run.dir,
 							)
 							print(f"\n-> Checkpoint saved to {ckpt_path}")
@@ -316,7 +369,7 @@ def train(config: Config, fresh: bool = False) -> None:
 		except KeyboardInterrupt:
 			if completed_episodes > start_epi:
 				ckpt_path = save_checkpoint(
-					agent, config, CHECKPOINT_DIR,
+					agent, config, ckpt_dir, exp_name, seed,
 					completed_episodes, current_epsilon, total_steps, run.dir,
 				)
 				print(f"\n-> Interrupted. Checkpoint saved to {ckpt_path}")
@@ -328,19 +381,20 @@ def train(config: Config, fresh: bool = False) -> None:
 
 		if completed_episodes % config.save_interval != 0:
 			save_checkpoint(
-				agent, config, CHECKPOINT_DIR,
+				agent, config, ckpt_dir, exp_name, seed,
 				completed_episodes, current_epsilon, total_steps, run.dir,
 			)
 
-		final_model_dir = CURRENT_DIR / config.save_model_path
-		final_model_dir.mkdir(parents=True, exist_ok=True)
-		final_model_path = final_model_dir / f"{EXP_NAME}_final.pth"
+		final_model_path = get_final_model_path(config, exp_name, seed)
+		final_model_path.parent.mkdir(parents=True, exist_ok=True)
 		save_the_model(final_model_path, agent.get_save_state(include_replay=False))
 		print(f"-> Training complete! Final model saved to {final_model_path}")
 
 
 def main():
 	args = parse_args()
+	set_seed(args.seed)
+
 	config = load_config(config_cls=Config, config_path=DEFAULT_CONFIG_PATH, base_dir=CURRENT_DIR)
 	if config is None:
 		default_config_path, _ = create_default_config(config_cls=Config, config_path=DEFAULT_CONFIG_PATH, base_dir=CURRENT_DIR)
@@ -350,7 +404,7 @@ def main():
 	config.print_config()
 	print(f"Time to reach min epsilon: {episode_to_reach_min_epsilon(config.initial_epsilon, config.min_epsilon, config.epsilon_decay)} episodes")
 
-	train(config, fresh=args.fresh)
+	train(config, exp_name=args.exp_name, seed=args.seed, fresh=args.fresh)
 
 
 if __name__ == "__main__":
