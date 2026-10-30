@@ -9,7 +9,6 @@ import threading
 from collections import Counter
 from collections.abc import Callable
 from contextlib import nullcontext
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,9 +45,10 @@ def parse_args() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
 		description=(
 			"Evaluate a trained CarRacing DQN model (final model or a checkpoint). "
-			"Results are appended to the eval.csv of the training run the model came "
-			"from (found the same way train.py finds it when resuming) unless "
-			"--no-record is given."
+			"Results for a final model are appended to the eval.csv of the training "
+			"run it came from (found the same way train.py finds it when resuming) "
+			"unless --no-record is given. Checkpoints are never recorded to eval.csv. "
+			"To evaluate every checkpoint of an experiment, use sweep.py."
 		)
 	)
 
@@ -106,8 +106,8 @@ def parse_args() -> argparse.Namespace:
 		"--no-record",
 		action="store_true",
 		help=(
-			"Do not write anything to eval.csv (or the sweep/ file with --sweep). "
-			"Results are only printed."
+			"Do not write anything to eval.csv. Results are only printed. "
+			"Always on when the model is a checkpoint."
 		),
 	)
 	parser.add_argument(
@@ -120,15 +120,19 @@ def parse_args() -> argparse.Namespace:
 		"--seed-min",
 		type=int,
 		default=10_000,
-		help="First evaluation seed (inclusive). Each seed is one evaluation episode.",
+		help=(
+			"First evaluation seed. The seed increases by 1 for each episode "
+			"(seed-min, seed-min+1, ...)."
+		),
 	)
 	parser.add_argument(
-		"--seed-max",
+		"--episodes",
 		type=int,
-		default=10_004,
+		default=5,
 		help=(
-			"Last evaluation seed (inclusive). Ignored with --render-mode human, "
-			"which loops forever starting at --seed-min."
+			"Number of evaluation episodes to run. Seeds start at --seed-min and "
+			"increment automatically. Ignored with --render-mode human, which "
+			"loops forever."
 		),
 	)
 	parser.add_argument(
@@ -155,7 +159,6 @@ def parse_args() -> argparse.Namespace:
 			"action histogram. Use this to detect a collapsed (constant-action) policy."
 		),
 	)
-
 	parser.add_argument(
 		"--eval-epsilon",
 		type=float,
@@ -167,40 +170,6 @@ def parse_args() -> argparse.Namespace:
 		),
 	)
 
-	parser.add_argument(
-		"--sweep",
-		action="store_true",
-		help=(
-			"Greedily evaluate every checkpoint of the experiment on the same seeds "
-			"(--seed-min/--seed-max) and print one row per checkpoint. Use it to "
-			"find where a run's policy collapsed. Writes sweep/sweep_<sweep-name>.csv "
-			"inside the training run directory (found from the checkpoints' "
-			"metadata; next to this script if it can't be found) unless --no-record."
-		),
-	)
-	parser.add_argument(
-		"--sweep-name",
-		type=str,
-		default=None,
-		help=(
-			"With --sweep: unique name appended to the sweep file name, giving "
-			"sweep/sweep_<sweep-name>.csv. Refuses to overwrite an existing file. "
-			"If omitted, a timestamp is used."
-		),
-	)
-	parser.add_argument(
-		"--sweep-from",
-		type=int,
-		default=None,
-		help="With --sweep: first checkpoint episode to include (e.g. 2200).",
-	)
-	parser.add_argument(
-		"--sweep-to",
-		type=int,
-		default=None,
-		help="With --sweep: last checkpoint episode to include (e.g. 2300).",
-	)
-
 	return parser.parse_args()
 
 
@@ -209,6 +178,34 @@ def resolve_path(path: Path) -> Path:
 	if path.is_absolute():
 		return path.resolve()
 	return (CURRENT_DIR.parent.parent / path).resolve()
+
+
+def evaluation_seeds(seed_min: int, episodes: int) -> list[int]:
+	"""Consecutive evaluation seeds: seed_min, seed_min + 1, ... for `episodes` episodes."""
+	return list(range(seed_min, seed_min + episodes))
+
+
+def load_eval_config(config_path_arg: Path | None) -> tuple[Config, Path]:
+	"""Load the workflow config. Returns (config, resolved config path)."""
+	config_path = (
+		resolve_path(config_path_arg)
+		if config_path_arg is not None
+		else CURRENT_DIR / DEFAULT_CONFIG_PATH
+	)
+
+	config = load_config(
+		config_cls=Config,
+		config_path=str(config_path),
+		base_dir=CURRENT_DIR,
+	)
+
+	if config is None:
+		raise FileNotFoundError(
+			f"Could not load configuration from {config_path}. "
+			"Create config.json first using the training workflow."
+		)
+
+	return config, config_path
 
 
 # --------------------------------------------------------------------------- #
@@ -378,6 +375,11 @@ def seed_from_path(path: Path) -> int | None:
 	"""Training seed encoded in a model file name (…_seed42…), if any."""
 	matches = SEED_PATTERN.findall(path.stem)
 	return int(matches[-1]) if matches else None
+
+
+def is_checkpoint_path(path: Path) -> bool:
+	"""True if a model file is a training checkpoint (…_checkpoint_epiN…), not a final model."""
+	return "_checkpoint" in path.stem or EPISODE_PATTERN.search(path.stem) is not None
 
 
 def resolve_run_dir(
@@ -575,140 +577,6 @@ def evaluate_episode(
 	return total_reward, length, skipped
 
 
-def resolve_sweep_path(args: argparse.Namespace, run_dir: Path | None) -> Path:
-	"""
-	Output file for a sweep: <run_dir or script dir>/sweep/sweep_<name>.csv.
-
-	The name comes from --sweep-name, or a timestamp if not given. An existing
-	file is never overwritten.
-	"""
-	name = args.sweep_name or datetime.now().strftime("%Y%m%d_%H%M%S")
-	# Keep the file name safe: letters, digits, dot, dash, underscore only.
-	name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._-")
-
-	if not name:
-		raise ValueError("--sweep-name has no usable characters.")
-
-	out_path = (run_dir or CURRENT_DIR) / "sweep" / f"sweep_{name}.csv"
-
-	if out_path.exists():
-		raise FileExistsError(
-			f"Sweep file already exists: {out_path}. Choose a different --sweep-name."
-		)
-
-	return out_path
-
-
-def sweep_checkpoints(
-	args: argparse.Namespace,
-	config: Config,
-	device: str,
-) -> None:
-	"""
-	Evaluate every checkpoint of the experiment on the same seeds and print one
-	row per checkpoint, so you can see where the policy got better or collapsed.
-
-	"stuck" counts episodes that ran the full 250 decisions with reward < -80,
-	which is what a car that never moves scores (about -93).
-
-	The result is written to sweep/sweep_<name>.csv only when recording is
-	enabled (no --no-record). The run directory is found from the newest swept
-	checkpoint, like a normal evaluation.
-	"""
-	def episode_of(path: Path) -> int:
-		episode = episode_from_path(path)
-		return episode if episode is not None else -1
-
-	files = sorted(list_checkpoints(args.exp_name, args.train_seed), key=episode_of)
-	if args.sweep_from is not None:
-		files = [p for p in files if episode_of(p) >= args.sweep_from]
-	if args.sweep_to is not None:
-		files = [p for p in files if episode_of(p) <= args.sweep_to]
-
-	if not files:
-		raise FileNotFoundError(
-			f"No checkpoints to sweep for experiment '{args.exp_name}' "
-			f"in {get_checkpoint_dir(args.exp_name)} (check --sweep-from/--sweep-to)."
-		)
-
-	# Resolved up front so a name clash fails before the (long) sweep starts.
-	out_path = None
-	if not args.no_record:
-		newest = files[-1]
-		run_dir = resolve_run_dir(
-			read_meta(newest, "cpu"), args.exp_name, newest, args.train_seed
-		)
-		out_path = resolve_sweep_path(args, run_dir)
-
-	seeds = list(range(args.seed_min, args.seed_max + 1))
-	env = make_env(config, "none")
-	rows: list[dict[str, float | int | str]] = []
-
-	print(
-		f"Sweeping {len(files)} checkpoints on seeds {seeds[0]}..{seeds[-1]} "
-		f"(eval epsilon {args.eval_epsilon})\n"
-	)
-	print(f"{'episode':>8} {'mean':>9} {'std':>8} {'min':>9} {'max':>9} {'len':>6} {'stuck':>7}")
-
-	try:
-		for path in files:
-			agent, _ = load_model(path, config, device)
-
-			rewards: list[float] = []
-			lengths: list[int] = []
-			for seed in seeds:
-				reward, length, _ = evaluate_episode(
-					env, agent, seed=seed, epsilon=args.eval_epsilon
-				)
-				rewards.append(reward)
-				lengths.append(length)
-
-			reward_arr = np.asarray(rewards)
-			length_arr = np.asarray(lengths)
-			stuck = int(np.sum((reward_arr < -80) & (length_arr >= 250)))
-
-			row = {
-				"episode": episode_of(path),
-				"checkpoint": path.name,
-				"mean_reward": float(reward_arr.mean()),
-				"std_reward": float(reward_arr.std()),
-				"min_reward": float(reward_arr.min()),
-				"max_reward": float(reward_arr.max()),
-				"mean_length": float(length_arr.mean()),
-				"stuck": stuck,
-				"episodes": len(seeds),
-			}
-			rows.append(row)
-
-			print(
-				f"{row['episode']:>8} {row['mean_reward']:>9.1f} {row['std_reward']:>8.1f} "
-				f"{row['min_reward']:>9.1f} {row['max_reward']:>9.1f} "
-				f"{row['mean_length']:>6.0f} {stuck:>4}/{len(seeds)}",
-				flush=True,
-			)
-	except KeyboardInterrupt:
-		print("\nStopped early; saving the rows collected so far."
-			if not args.no_record else "\nStopped early.")
-	finally:
-		env.close()
-		if rows:
-			if out_path is not None:
-				out_path.parent.mkdir(parents=True, exist_ok=True)
-				with out_path.open("w", newline="", encoding="utf-8") as file:
-					writer = csv.DictWriter(file, fieldnames=list(rows[0].keys()))
-					writer.writeheader()
-					writer.writerows(rows)
-				print(f"\nSweep results written to: {out_path}")
-			else:
-				print("\nRecording disabled (--no-record): sweep file not written.")
-
-			best = max(rows, key=lambda r: r["mean_reward"])
-			print(
-				f"Best checkpoint: {best['checkpoint']} "
-				f"(mean reward {best['mean_reward']:.1f})"
-			)
-
-
 def run_interactive(
 	env: gym.Env,
 	agent: DQNetworkTestAgent,
@@ -777,8 +645,8 @@ def run_evaluation(
 	run_dir: Path | None,
 ) -> None:
 	"""
-	Run interactive testing or seeded evaluation episodes (one per seed in
-	[seed_min, seed_max]).
+	Run interactive testing or seeded evaluation episodes (`args.episodes`
+	episodes, seeds starting at `args.seed_min` and increasing by 1).
 
 	Seeded episodes are appended to <run_dir>/eval.csv unless --no-record is set.
 	"""
@@ -815,7 +683,7 @@ def run_evaluation(
 		else:
 			print("Recording disabled (--no-record): eval.csv will not be written.")
 
-		seeds = range(args.seed_min, args.seed_max + 1)
+		seeds = evaluation_seeds(args.seed_min, args.episodes)
 		total_episodes = len(seeds)
 		rewards: list[float] = []
 
@@ -860,11 +728,8 @@ def run_evaluation(
 def main() -> None:
 	args = parse_args()
 
-	if args.seed_max < args.seed_min:
-		raise ValueError("--seed-max must be >= --seed-min.")
-
-	if args.sweep and args.render_mode == "human":
-		raise ValueError("--sweep can't be combined with --render-mode human.")
+	if args.episodes < 1:
+		raise ValueError("--episodes must be >= 1.")
 
 	if not 0.0 <= args.eval_epsilon <= 1.0:
 		raise ValueError("--eval-epsilon must be between 0 and 1.")
@@ -881,31 +746,8 @@ def main() -> None:
 	np.random.seed(args.seed_min)
 	torch.manual_seed(args.seed_min)
 
-	config_path = (
-		resolve_path(args.config_path)
-		if args.config_path is not None
-		else CURRENT_DIR / DEFAULT_CONFIG_PATH
-	)
-
-	config = load_config(
-		config_cls=Config,
-		config_path=str(config_path),
-		base_dir=CURRENT_DIR,
-	)
-
-	if config is None:
-		raise FileNotFoundError(
-			f"Could not load configuration from {config_path}. "
-			"Create config.json first using the training workflow."
-		)
-
+	config, config_path = load_eval_config(args.config_path)
 	device = args.device or config.device
-
-	if args.sweep:
-		print(f"Experiment: {args.exp_name}")
-		print(f"Device: {device}")
-		sweep_checkpoints(args, config, device)
-		return
 
 	model_path = select_model_path(args, config)
 
@@ -913,6 +755,12 @@ def main() -> None:
 		raise FileNotFoundError(f"Model checkpoint not found: {model_path}")
 
 	agent, meta = load_model(model_path, config, device)
+
+	# Only final models are recorded to eval.csv. Checkpoint evaluations are
+	# print-only (use sweep.py to compare checkpoints).
+	if is_checkpoint_path(model_path) and not args.no_record:
+		print("Note: evaluating a checkpoint, so nothing will be written to eval.csv.")
+		args.no_record = True
 
 	recording = not args.no_record and args.render_mode != "human"
 	run_dir = (

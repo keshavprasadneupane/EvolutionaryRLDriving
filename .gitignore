@@ -36,6 +36,10 @@ heavy_models/
 models/
 checkpoints/
 checkpoint/
+
+# Sweep results
+sweep*.csv
+
 *.pt
 *.pth
 *.ckpt
