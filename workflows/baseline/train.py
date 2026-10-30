@@ -28,7 +28,9 @@ DEFAULT_CONFIG_PATH = "config.json"
 CHECKPOINT_ROOT = CURRENT_DIR / "checkpoint"
 DEFAULT_SEED = 42
 
-SAVE_REPLAY = False
+SAVE_REPLAY = False  # whether periodic/final checkpoints include the replay buffer. It is large (GBs for 50k
+# image transitions), so it is off by default. An interrupted run (Ctrl+C) always saves it so training can resume
+# with its buffer; see the KeyboardInterrupt handler in train().
 TRAIN_EVERY = 3  # train every N environment steps (not episodes). This is a hyperparameter that can be tuned for performance.
 NUM_ENVS = 10    # Number of parallel CPU environments for AsyncVectorEnv
 
@@ -139,11 +141,12 @@ def save_checkpoint(
 	epsilon: float,
 	total_steps: int,
 	run_dir: Path,
+	include_replay: bool = SAVE_REPLAY,
 ) -> Path:
 	ckpt_dir.mkdir(parents=True, exist_ok=True)
 	ckpt_path = ckpt_dir / get_checkpoint_filename(exp_name, completed_episodes, seed)
 
-	save_state = agent.get_save_state(include_replay=SAVE_REPLAY)
+	save_state = agent.get_save_state(include_replay=include_replay)
 	save_state["meta"] = {
 		"episodes": int(completed_episodes),
 		"epsilon": float(epsilon),
@@ -365,8 +368,9 @@ def train(config: Config, seed: int, fresh: bool = False) -> None:
 				ckpt_path = save_checkpoint(
 					agent, config, ckpt_dir, exp_name, seed,
 					completed_episodes, current_epsilon, total_steps, run.dir,
+					include_replay=True,
 				)
-				print(f"\n-> Interrupted. Checkpoint saved to {ckpt_path}")
+				print(f"\n-> Interrupted. Checkpoint (with replay buffer) saved to {ckpt_path}")
 			raise
 		finally:
 			env.close()
