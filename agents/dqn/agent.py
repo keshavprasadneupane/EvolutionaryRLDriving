@@ -75,6 +75,7 @@ class DQNetworkTrainAgent(DQNetworkAgent):
 		*,
 		network: NNewtork,
 		optimizer: torch.optim.Optimizer,
+		scheduler: torch.optim.lr_scheduler._LRScheduler | None = None,
 		target_update_freq: int = 1000,
 		tau: float = 1.0,
 		double_dqn: bool = False,
@@ -111,6 +112,7 @@ class DQNetworkTrainAgent(DQNetworkAgent):
 		super().__init__(network=network)
 
 		self.optimizer = optimizer
+		self.scheduler = scheduler
 		self.target_update_freq = target_update_freq
 		self.tau = tau
 		self.double_dqn = double_dqn
@@ -256,6 +258,9 @@ class DQNetworkTrainAgent(DQNetworkAgent):
 
 		self.optimizer.step()
 
+		if self.scheduler is not None:
+			self.scheduler.step()
+
 		self.steps += 1
 
 		if self.steps % self.target_update_freq == 0:
@@ -272,6 +277,7 @@ class DQNetworkTrainAgent(DQNetworkAgent):
 			"interaction_step": self._interaction_step,
 			"batch_size": self.batch_size,
 			"warmup": self.warmup,
+			"scheduler_state_dict": self.scheduler.state_dict() if self.scheduler is not None else None,
 			"replay_enabled": self.replay,
 		}
 
