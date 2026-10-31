@@ -28,15 +28,15 @@ class ConvNet(NNewtork):
 		# 1. Build local components first (before super().__init__())
 		conv = nn.Sequential(
 			nn.Conv2d(in_channels, 16, kernel_size=8, stride=4),
-			nn.LeakyReLU(negative_slope=0.01),
+			nn.PReLU(num_parameters=16),
 			nn.Conv2d(16, 32, kernel_size=4, stride=2),
-			nn.LeakyReLU(negative_slope=0.01),
+			nn.PReLU(num_parameters=32),
 		)
 		n_features = 32 * 9 * 9
 
 		fc = nn.Sequential(
 			nn.Linear(n_features, hidden_dim),
-			nn.LeakyReLU(negative_slope=0.01),
+			nn.PReLU(num_parameters=hidden_dim),
 			nn.Linear(hidden_dim, output_dim),
 		)
 

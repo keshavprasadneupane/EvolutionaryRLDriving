@@ -1,5 +1,5 @@
 {
-	"exp_name": "dd_leaky_relu",
+	"exp_name": "dd_prelu",
 	"epochs": 2300,
 	"target_update_freq": 250,
 	"in_channels": 4,

@@ -14,6 +14,15 @@
     "gymnasium": "1.4.0"
   },
   "command": "/home/keshav/Projects/AI_ML/Gymnasium/EvolutionaryRLDriving/workflows/baseline/train.py",
-  "finished_at": "2026-10-30T18:40:04",
-  "duration_seconds": 8105.5
+  "duration_seconds": 12782.9,
+  "resumes": [
+    {
+      "resumed_at": "2026-10-31T06:53:52",
+      "from_episode": 2300,
+      "from_env_steps": 577222,
+      "git_commit": "2602bc7a8bb4f8dd2bde2b1400347169b0422c85",
+      "command": "/home/keshav/Projects/AI_ML/Gymnasium/EvolutionaryRLDriving/workflows/baseline/train.py"
+    }
+  ],
+  "finished_at": "2026-10-31T08:11:50"
 }
