@@ -18,7 +18,7 @@ import torch
 
 from agents.dqn.agent import DQNetworkTestAgent
 from environments.car_race import CarRacing
-from network.convnet import ConvNet
+from network.convnet import ConvNet_Prelu
 from training.run_logger import RunLogger
 from utility.basic import load_checkpoint, load_config
 from .config import Config
@@ -473,7 +473,7 @@ def load_model(
 	device: str,
 ) -> tuple[DQNetworkTestAgent, dict[str, Any]]:
 	"""Build the evaluation network and load the saved DQN state. Returns (agent, meta)."""
-	network = ConvNet(
+	network = ConvNet_Prelu(
 		in_channels=config.in_channels,
 		output_dim=5,
 		hidden_dim=config.hidden_dim,

@@ -18,7 +18,7 @@ from utility.basic import (
 )
 from training.run_logger import RunLogger
 from agents.dqn.agent import DQNetworkTrainAgent
-from network.convnet import ConvNet
+from network.convnet import ConvNet_Prelu
 from .config import Config
 from environments.car_race import CarRacing
 
@@ -90,7 +90,7 @@ def make_env(config: Config, seed_offset: int):
 
 def create_agent(config: Config, seed: int) -> DQNetworkTrainAgent:
 	"""Creates and initializes the DQN training agent for CarRacing-v3."""
-	network = ConvNet(
+	network = ConvNet_Prelu(
 		in_channels=config.in_channels,
 		output_dim=5,
 		hidden_dim=config.hidden_dim,
