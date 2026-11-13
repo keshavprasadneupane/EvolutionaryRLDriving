@@ -11,8 +11,8 @@ import pygame
 from race_env import MultiCarRace, SingleCarRace
 
 multi = "multi" in sys.argv
-kw = {"wall_thickness": 0.0} if "--no-walls" in sys.argv else {}
-
+kw = {"wall_thickness": 0.0, "grass_padding": 50.0} if "--no-walls" in sys.argv else {}
+kw["ray_count"] = 11
 env: SingleCarRace | MultiCarRace
 if multi:
 	env = MultiCarRace(render_mode="human", num_cars=8, auto_reset=True, **kw)
@@ -57,6 +57,7 @@ for _ in range(5000):
 			action = np.array([throttle, steer], dtype=np.float32)
 
 	obs, reward, terminated, truncated, info = env.step(action)
+	#print(f"\n Obs size: {obs.shape}\nObservation: {obs}\nReward: {reward}\nTerminated: {terminated}\nTruncated: {truncated}\nInfo: {info}\n\n")
 	if not multi and (terminated or truncated):
 		obs, info = env.reset()
 	if env._renderer is not None and env._renderer.closed:

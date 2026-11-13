@@ -4,7 +4,6 @@ import torch
 
 class Transitions(NamedTuple):
 	"""A batch of transitions. Unpacks like a plain 5-tuple."""
-
 	states: np.ndarray
 	actions: np.ndarray
 	rewards: np.ndarray

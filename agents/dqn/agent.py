@@ -55,10 +55,6 @@ class DQNetworkAgent:
 	def get_action(self, state: np.ndarray) -> tuple[int, float]:
 		"""
 		Selects the greedy action and returns its estimated Q-value.
-
-		`state` is a single, unbatched observation (e.g. (C, H, W)). A batch
-		dimension is added here because layers like nn.Flatten assume dim 0
-		is the batch.
 		"""
 		q_values = self.network.predict(state[np.newaxis, ...])[0]
 		action = int(np.argmax(q_values))
@@ -190,8 +186,10 @@ class DQNetworkTrainAgent(DQNetworkAgent):
 		"""
 		Stores the transition in the replay buffer every step. The gradient
 		update only runs when `learn` is True (and the buffer is warmed up).
+		`learn` is used to skip gredient update during evaluation, for example.
+		Returns the loss of the gradient step, or 0.0 if no update was performed.
 		"""
-		if not 0.0 <= discount_factor <= 1.0:
+		if not (0.0 <= discount_factor <= 1.0):
 			raise ValueError("Discount factor must be between 0 and 1.")
 
 		self._interaction_step += 1

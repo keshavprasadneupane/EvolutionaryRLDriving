@@ -38,6 +38,13 @@ DISCRETE_BITS = (
 
 S = core.SurfaceType
 
+SURFACE_TO_INDEX = {
+	S.Track: 0,
+	S.Grass: 1,
+	S.Wall: 2,
+	S.Outside: 3,
+}
+NUM_SURFACE_TYPES = len(SURFACE_TO_INDEX)
 
 class _Tracker:
 	"""Per-car episode bookkeeping."""
@@ -54,6 +61,8 @@ class _Tracker:
 
 class _RaceBase(gym.Env[Any, Any]):
 	metadata = {"render_modes": ["human"], "render_fps": 60}
+
+	
 
 	def __init__(
 		self,
@@ -112,11 +121,12 @@ class _RaceBase(gym.Env[Any, Any]):
 
 		self._car_cfg = (core.CarConfig(car_config) if car_config is not None
 						 else core.CarConfig())
+		
 		self._lidar_cfg = core.LidarConfig()
 		self._lidar_cfg.ray_count = max(0, ray_count)
 		self._lidar_cfg.range = ray_range
 
-		self.obs_dim: int = 8 + self._lidar_cfg.ray_count
+		self.obs_dim: int = 8 + 2 * self._lidar_cfg.ray_count  # mark
 		self._mode = core.DriveMode.Continuous if continuous else core.DriveMode.Discrete
 
 		self._world: Optional[core.RaceWorld] = None
@@ -174,11 +184,19 @@ class _RaceBase(gym.Env[Any, Any]):
 			self._static = world.get_static()
 
 	# ---------------------------------------------- what YOU decide (python side)
+	
 	def _vector(self, o: core.CarObservation) -> np.ndarray:
 		"""Observation vector for one car, from a CarObservation."""
 		half = float(self._static["track_half_width"])
 		lock = self._car_cfg.steer_lock_angle
-		v = np.empty(self.obs_dim, np.float32)
+
+		ray_count = self._lidar_cfg.ray_count
+
+		v = np.empty(
+			8 + ray_count * NUM_SURFACE_TYPES + ray_count,
+			dtype=np.float32,
+		)
+
 		v[0] = o.local_velocity[0] / self.velocity_scale
 		v[1] = o.local_velocity[1] / self.velocity_scale
 		v[2] = o.angular_velocity / self.angular_scale
@@ -186,53 +204,68 @@ class _RaceBase(gym.Env[Any, Any]):
 		v[4] = o.traction
 		v[5] = o.lateral_offset / half
 		v[6] = o.heading_alignment
-		v[7] = 1.0 if o.surface == S.Grass else 0.0
-		v[8:] = o.rays
+		v[7] = SURFACE_TO_INDEX[o.surface]  # Current car surface
+
+		# One-hot encode lidar surface classifications.
+		surfaces = np.asarray(
+			o.ray_surfaces,
+			dtype=np.int64,
+		)
+
+		encoded = np.eye(NUM_SURFACE_TYPES, dtype=np.float32)[surfaces]
+
+		start = 8
+		end = start + ray_count * NUM_SURFACE_TYPES
+
+		v[start:end] = encoded.flatten()
+		v[end:] = o.rays
+
 		return v
 
-	def _judge(self, o: core.CarObservation, t: _Tracker) -> tuple[float, bool, bool]:
+
+	def _judge(self, observation: core.CarObservation, tracker: _Tracker) -> tuple[float, bool, bool]:
 		"""(reward, terminated, truncated) for one car after a step."""
 		st = self._static
 		n = int(st["num_samples"])
-		t.steps += 1
-		d = (o.track_index - t.last_index) % n
+		tracker.steps += 1
+		d = (observation.track_index - tracker.last_index) % n
 		if d > n // 2:
 			d -= n
-		t.last_index = o.track_index
+		tracker.last_index = observation.track_index
 
 		reward = self.progress_reward * d
-		new_cp = o.max_checkpoints - t.max_cp
+		new_cp = observation.max_checkpoints - tracker.max_cp
 		if new_cp > 0:
 			reward += self.checkpoint_reward * new_cp
-		t.max_cp = max(t.max_cp, o.max_checkpoints)
-		if o.surface == S.Grass:
+		tracker.max_cp = max(tracker.max_cp, observation.max_checkpoints)
+		if observation.surface == S.Grass:
 			reward -= self.grass_penalty
 		reward -= self.step_penalty
 
-		crashed = o.surface in (S.Wall, S.Outside)
+		crashed = observation.surface in (S.Wall, S.Outside)
 		if not crashed and st["has_walls"]:
 			wall_dist = st["track_half_width"] + st["grass_width"] - self.crash_margin
-			crashed = abs(o.lateral_offset) >= wall_dist
+			crashed = abs(observation.lateral_offset) >= wall_dist
 		terminated = False
 		if crashed:
 			terminated = True
 			reward -= self.crash_penalty
-		elif self.target_laps > 0 and o.laps_completed >= self.target_laps:
+		elif self.target_laps > 0 and observation.laps_completed >= self.target_laps:
 			terminated = True
 			reward += self.finish_bonus
-		truncated = (not terminated) and t.steps >= self.max_steps
-		t.terminated, t.truncated = terminated, truncated
-		t.done = terminated or truncated
+		truncated = (not terminated) and tracker.steps >= self.max_steps
+		tracker.terminated, tracker.truncated = terminated, truncated
+		tracker.done = terminated or truncated
 		return float(reward), terminated, truncated
 
-	def _info(self, o: core.CarObservation, t: _Tracker) -> dict[str, Any]:
+	def _info(self, observation: core.CarObservation, tracker: _Tracker) -> dict[str, Any]:
 		return {
-			"speed": o.speed,
-			"lateral_offset": o.lateral_offset,
-			"checkpoints": o.checkpoints_crossed,
-			"laps": o.laps_completed,
-			"surface": int(o.surface),
-			"episode_step": t.steps,
+			"speed": observation.speed,
+			"lateral_offset": observation.lateral_offset,
+			"checkpoints": observation.checkpoints_crossed,
+			"laps": observation.laps_completed,
+			"surface": int(observation.surface),
+			"episode_step": tracker.steps,
 		}
 
 	# ------------------------------------------------------------------ render
